@@ -178,9 +178,7 @@ class KeyMorph(nn.Module):
 
         start_time = time.time()
 
-        with torch.amp.autocast(
-            device_type="cuda", enabled=self.use_amp, dtype=torch.float16
-        ):
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
             # Extract keypoints
             points_f, feat_f = self.get_keypoints(img_f, return_feat=True)
             points_m, feat_m = self.get_keypoints(img_m, return_feat=True)

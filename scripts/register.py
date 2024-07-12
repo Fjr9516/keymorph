@@ -11,9 +11,9 @@ from keymorph.utils import rescale_intensity
 from keymorph.model import KeyMorph
 from keymorph.unet3d.model import UNet2D, UNet3D, TruncatedUNet3D
 from keymorph.net import ConvNet
-from scripts.pairwise_register_eval import run_eval
-from scripts.groupwise_register_eval import run_group_eval
-from scripts.script_utils import summary, load_checkpoint
+from pairwise_register_eval import run_eval
+# from groupwise_register_eval import run_group_eval
+from script_utils import summary, load_checkpoint
 
 
 def parse_args():
@@ -313,7 +313,7 @@ if __name__ == "__main__":
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
     print("Number of GPUs: {}".format(torch.cuda.device_count()))
-
+    print(f"Torch version is {torch.__version__}")
     # Create save path
     save_path = Path(args.save_dir)
     if not os.path.exists(save_path) and args.save_eval_to_disk:

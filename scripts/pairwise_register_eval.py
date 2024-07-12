@@ -44,24 +44,28 @@ def run_eval(
         list_of_eval_aligns,
         args.save_dir,
     )
-
+    
     test_metrics = _build_metric_dict(list_of_eval_names)
-    for i, (fixed, moving) in enumerate(loader):
+    fixed_loader = loader['fixed']
+    moving_loader = loader['moving']
+    
+    # Iterate over both data loaders simultaneously
+    for i, (fixed, moving) in enumerate(zip(fixed_loader, moving_loader)):
         if args.early_stop_eval_subjects and i == args.early_stop_eval_subjects:
             break
         for aug in list_of_eval_augs:
             param = parse_test_aug(aug)
-            mod1 = fixed["modality"][0]
-            mod2 = moving["modality"][0]
-            print(
-                f"\n\n\nRunning test: subject pair {i}, mod {mod1}->{mod2}, aug {aug}"
-            )
+            # mod1 = fixed["modality"][0]
+            # mod2 = moving["modality"][0]
+            # print(
+            #     f"\n\n\nRunning test: subject pair {i}, mod {mod1}->{mod2}, aug {aug}"
+            # )
 
             # Create directory to save images, segs, points, metrics
-            mod1_str = "-".join(mod1.split("/")[-2:])
-            mod2_str = "-".join(mod2.split("/")[-2:])
+            mod1_str = fixed['img']['stem'] # "-".join(mod1.split("/")[-2:])
+            mod2_str = moving['img']['stem'] # "-".join(mod2.split("/")[-2:])
             save_dir = (
-                args.model_eval_dir / save_dir_prefix / f"{i}_{mod1_str}_{mod2_str}"
+                args.model_eval_dir / save_dir_prefix / f"{mod1_str}_{mod2_str}"
             )
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
@@ -465,7 +469,7 @@ def run_eval(
                 for align_type_str in list_of_eval_aligns:
                     metrics = all_metrics[align_type_str]
                     print(test_metrics)
-                    test_metrics[f"{m}:{mod1}:{mod2}:{aug}:{align_type_str}"].append(
+                    test_metrics[f"{m}:fixed:moving:{aug}:{align_type_str}"].append(
                         metrics[m]
                     )
 

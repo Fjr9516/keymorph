@@ -1,0 +1,6 @@
+weights/
+.ipynb_checkpoints/
+keymorph/__pycache__/
+keymorph/unet3d/__pycache__/
+register_output/
+scripts/__pycache__/

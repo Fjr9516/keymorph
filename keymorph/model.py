@@ -180,7 +180,7 @@ class KeyMorph(nn.Module):
 
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             # Extract keypoints
-            points_f, feat_f = self.get_keypoints(img_f, return_feat=True)
+            points_f, feat_f = self.get_keypoints(img_f, return_feat=True) # [1, 256, 3]
             points_m, feat_m = self.get_keypoints(img_m, return_feat=True)
 
             if self.weight_keypoints == "power":
@@ -189,7 +189,7 @@ class KeyMorph(nn.Module):
                         self.weight_by_power, feat_f, feat_m
                     )
                 else:
-                    weights = self.weight_by_power(feat_f, feat_m)
+                    weights = self.weight_by_power(feat_f, feat_m) # [1, 256]
             else:
                 weights = None
 
@@ -239,7 +239,7 @@ class KeyMorph(nn.Module):
                     w=weights,
                     aff_f=aff_f,
                     aff_m=aff_m,
-                    shape_f=img_f.shape,
+                    shape_f=img_f.shape, # [1, 1, 256, 256, 256]
                     shape_m=img_m.shape,
                     dim=self.dim,
                     align_in_real_world_coords=self.align_keypoints_in_real_world_coords,

@@ -7,14 +7,17 @@ from argparse import ArgumentParser
 import torchio as tio
 from pathlib import Path
 
-from keymorph.utils import rescale_intensity
+from keymorph.utils import rescale_intensity, align_img
 from keymorph.model import KeyMorph
 from keymorph.unet3d.model import UNet2D, UNet3D, TruncatedUNet3D
 from keymorph.net import ConvNet
-from pairwise_register_eval import run_eval
+# from pairwise_register_eval import run_eval
 # from groupwise_register_eval import run_group_eval
 from script_utils import summary, load_checkpoint
 
+'''
+Brainmorph register, works on full resolution.
+'''
 
 def parse_args():
     parser = ArgumentParser()
@@ -113,6 +116,10 @@ def parse_args():
 
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
 
+    parser.add_argument("--moved", type=str, required=True, help="Moved save path")
+    
+    # parser.add_argument("--trans", type=str, required=True, help="Transformation save path")
+    
     parser.add_argument(
         "--half_resolution",
         action="store_true",
@@ -172,30 +179,9 @@ def build_tio_subject(img_path, seg_path=None):
 
 
 def get_loaders(args):
-    args.seg_available = args.moving_seg is not None and args.fixed_seg is not None
     if os.path.isfile(args.moving) and os.path.isfile(args.fixed):
-        if args.seg_available:
-            moving = [build_tio_subject(args.moving, args.moving_seg)]
-            fixed = [build_tio_subject(args.fixed, args.fixed_seg)]
-        else:
-            moving = [build_tio_subject(args.moving)]
-            fixed = [build_tio_subject(args.fixed)]
-    elif os.path.isdir(args.moving) and os.path.isdir(args.fixed):
-        fixed, moving = [], []
-        for moving_name in os.listdir(args.moving):
-            moving_path = os.path.join(args.moving, moving_name)
-            if args.seg_available:
-                moving_seg_path = os.path.join(args.moving_seg, moving_name)
-            else:
-                moving_seg_path = None
-            moving.append(build_tio_subject(moving_path, moving_seg_path))
-        for fixed_name in os.listdir(args.fixed):
-            fixed_path = os.path.join(args.fixed, fixed_name)
-            if args.seg_available:
-                fixed_seg_path = os.path.join(args.fixed_seg, fixed_name)
-            else:
-                fixed_seg_path = None
-            fixed.append(build_tio_subject(fixed_path, fixed_seg_path))
+        moving = [build_tio_subject(args.moving)]
+        fixed = [build_tio_subject(args.fixed)]
 
     # Build dataset
     fixed_dataset = tio.SubjectsDataset(fixed, transform=transform)
@@ -213,6 +199,35 @@ def get_loaders(args):
     loaders = {"fixed": fixed_loader, "moving": moving_loader}
     return loaders
 
+def load_img(img_path, norm = True):
+    ''' Load image and normalize as is done in get_loader.
+    Our images are already volumes of 256**3 isotropic 1-mm voxels, so
+    resampling, cropping, and padding are unnecessary.'''
+    f = tio.ScalarImage(img_path)
+    if norm:
+        f = tio.Lambda(rescale_intensity)(f)
+        
+    # Transpose and flip image such that its axes are roughly aligned with RAS.
+    ori_to_world = f.affine
+    f = tio.ToCanonical()(f)
+    ras_to_world = f.affine
+    ori_to_ras = np.linalg.inv(ras_to_world) @ ori_to_world
+
+    return ori_to_ras, ras_to_world, f.data.unsqueeze(0).float()
+
+def load_seg(seg_path):
+    ''' Load seg as is done in get_loader.
+    Our images are already volumes of 256**3 isotropic 1-mm voxels, so
+    resampling, cropping, and padding are unnecessary.'''
+    f = tio.LabelMap(seg_path)
+
+    # Transpose and flip image such that its axes are roughly aligned with RAS.
+    ori_to_world = f.affine
+    f = tio.ToCanonical()(f)
+    ras_to_world = f.affine
+    ori_to_ras = np.linalg.inv(ras_to_world) @ ori_to_world
+
+    return ori_to_ras, ras_to_world, f.data.unsqueeze(0).float()
 
 def get_foundation_weights_path(weights_dir, num_keypoints, num_levels):
     template_name = "foundation-numkey{}-numlevels{}.pth.tar"
@@ -281,11 +296,10 @@ def get_model(args):
             use_amp=args.use_amp,
             use_checkpoint=args.use_checkpoint,
             weight_keypoints=args.weighted_kp_align,
-            align_keypoints_in_real_world_coords=args.align_keypoints_in_real_world_coords, 
+            # align_keypoints_in_real_world_coords=args.align_keypoints_in_real_world_coords, 
         )
         registration_model.to(args.device)
         summary(registration_model)
-        #import pdb; pdb.set_trace()
     elif args.registration_model == "itkelastix":
         from keymorph.baselines.itkelastix import ITKElastix
 
@@ -323,9 +337,10 @@ if __name__ == "__main__":
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
     print("Number of GPUs: {}".format(torch.cuda.device_count()))
     print(f"Torch version is {torch.__version__}")
+
     # Create save path
     save_path = Path(args.save_dir)
-    if not os.path.exists(save_path) and args.save_eval_to_disk:
+    if not os.path.exists(save_path):
         os.makedirs(save_path)
     args.model_eval_dir = save_path
 
@@ -333,36 +348,6 @@ if __name__ == "__main__":
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-
-    # Data
-    if args.half_resolution:
-        transform = tio.Compose(
-            [
-                # tio.Lambda(lambda x: x.permute(0, 1, 3, 2)),
-                tio.ToCanonical(), # Add to RAS
-                tio.Resize(128),
-                tio.Lambda(rescale_intensity, include=("img",)),
-            ]
-        )
-    else:
-        transform = tio.Compose(
-            [
-                tio.ToCanonical(),
-                tio.Resample(1),
-                tio.Resample("img"),
-                tio.CropOrPad((256, 256, 256), padding_mode=0, include=("img",)),
-                tio.CropOrPad((256, 256, 256), padding_mode=0, include=("seg",)),
-                tio.Lambda(rescale_intensity, include=("img",)),
-            ],
-            include=("img", "seg"),
-        )
-
-    # Loaders
-    loaders = get_loaders(args)
-
-    # Evaluation parameters
-    list_of_eval_names = [("fixed", "moving")]
-    list_of_eval_augs = ["rot0"]
 
     # Model
     registration_model = get_model(args)
@@ -384,28 +369,69 @@ if __name__ == "__main__":
             registration_model,
             device=args.device,
         )
+    
+    # Data
+    fix_to_vox, aff_f, img_f = load_img(args.fixed)
+    mov_to_vox, aff_m, img_m = load_img(args.moving)
+    # Move to device
+    img_f = img_f.float().to(args.device)
+    img_m = img_m.float().to(args.device)
+    # aff_f = torch.from_numpy(np.expand_dims(aff_f, axis=0))
+    # aff_m = torch.from_numpy(np.expand_dims(aff_m, axis=0))
+    
+    # Register
+    with torch.set_grad_enabled(False):
+        registration_results = registration_model(
+            img_f,
+            img_m,
+            transform_type=args.list_of_aligns,
+            return_aligned_points=True,
+            # align_keypoints_in_real_world_coords = args.align_keypoints_in_real_world_coords,
+            # aff_f=aff_f.to(img_f),
+            # aff_m=aff_m.to(img_m),
+        )
 
-    if args.groupwise:
-        print("running groupwise")
-        run_group_eval(
-            group_loader,
-            registration_model,
-            args.list_of_metrics,
-            list_of_eval_names,
-            list_of_eval_augs,
-            args.list_of_aligns,
-            list_of_group_sizes,
-            args,
-            save_dir_prefix="group_eval",
-        )
-    else:
-        run_eval(
-            loaders,
-            registration_model,
-            args.list_of_metrics,
-            list_of_eval_names,
-            list_of_eval_augs,
-            args.list_of_aligns,
-            args,
-            save_dir_prefix="eval",
-        )
+    # Get matrix
+    save_mappings = {'affine': 'aff',
+                     'rigid' : 'rig'}
+    # Still didnt find a way to extract transform...
+    # for align_type_str, res_dict in registration_results.items():
+    #     transform = res_dict["matrix"][0].cpu().detach().numpy()
+    #     transform = np.linalg.inv(mov_to_vox) @ np.linalg.inv(transform) @ fix_to_vox # TODO: fix this, not correct
+        
+    #     # Save matrix.
+    #     save_name = args.trans
+    #     directory, filename = os.path.split(save_name)
+    #     modified_filename = filename.replace("aff", save_mappings[align_type_str])
+    #     save_name = os.path.join(directory, modified_filename)
+    #     print(f'Saving matrix as {save_name}') 
+    #     np.savetxt(fname=save_name, X=transform, fmt='%.8f %.8f %.8f %.8f')
+
+    # Get moved
+    if args.moved:
+        # Resampling: original intensities (no normalization).
+        *_, img_m = load_img(args.moving, norm=False)
+        *_, seg_m = load_seg(args.moving_seg)
+        for align_type_str, res_dict in registration_results.items():
+            print(f'Processing alignment type: {align_type_str}')
+            grid = res_dict["grid"].cpu().detach()
+            img_a = align_img(grid, img_m, mode = 'bilinear')
+            seg_a = align_img(grid, seg_m, mode = 'nearest')
+            
+            # Save image.
+            save_name = args.moved
+            directory, filename = os.path.split(save_name)
+            modified_filename = filename.replace("aff", save_mappings[align_type_str])
+            save_name = os.path.join(directory, modified_filename)
+            print(f'Saving moved image as {save_name}') 
+            out = tio.ScalarImage(tensor=img_a[0, ...].cpu(), affine=aff_f)
+            out.save(path=save_name, squeeze=True)
+
+            # Save seg.
+            modified_filename = modified_filename.replace("ima", "lab")
+            save_name = os.path.join(directory, modified_filename)
+            print(f'Saving moved seg as {save_name}') 
+            out = tio.LabelMap(tensor=seg_a[0, ...].cpu(), affine=aff_f)
+            out.save(path=save_name, squeeze=True)
+
+

@@ -4,3 +4,5 @@ keymorph/__pycache__/
 keymorph/unet3d/__pycache__/
 register_output/
 scripts/__pycache__/
+example_data/
+example_data_half/

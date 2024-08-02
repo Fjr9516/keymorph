@@ -126,6 +126,13 @@ def parse_args():
         help="Early stop number of test subjects for fast eval",
     )
 
+    # JR: Add real world coords flag
+    parser.add_argument(
+        "--align_keypoints_in_real_world_coords",
+        action="store_true",
+        help="Align keypoints in real world coords",
+    )
+    
     # Miscellaneous
     parser.add_argument(
         "--seed",
@@ -274,9 +281,11 @@ def get_model(args):
             use_amp=args.use_amp,
             use_checkpoint=args.use_checkpoint,
             weight_keypoints=args.weighted_kp_align,
+            align_keypoints_in_real_world_coords=args.align_keypoints_in_real_world_coords, 
         )
         registration_model.to(args.device)
         summary(registration_model)
+        #import pdb; pdb.set_trace()
     elif args.registration_model == "itkelastix":
         from keymorph.baselines.itkelastix import ITKElastix
 
@@ -329,7 +338,8 @@ if __name__ == "__main__":
     if args.half_resolution:
         transform = tio.Compose(
             [
-                tio.Lambda(lambda x: x.permute(0, 1, 3, 2)),
+                # tio.Lambda(lambda x: x.permute(0, 1, 3, 2)),
+                tio.ToCanonical(), # Add to RAS
                 tio.Resize(128),
                 tio.Lambda(rescale_intensity, include=("img",)),
             ]
